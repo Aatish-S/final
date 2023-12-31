@@ -2,11 +2,53 @@ import os
 import platform
 import json
 import datetime
+from datetime import timedelta,datetime
 import boto3
 from botocore.exceptions import ClientError
 import time
+import subprocess
 
 region = 'ap-south-1'
+username = "null"
+userlogin = 0
+exit_commands = {'exit','quit','q','e'}
+commands = "1.Login\n2.Monitor Cost\n3.Email Bill\n4.Cost Alarm\n5.Logout"
+config_file_path = 'config.json'
+
+def userlogver(access_key,secret_access):
+    ce_client = boto3.client('ce',
+    aws_access_key_id=access_key,
+    aws_secret_access_key=secret_access,
+    region_name=region
+)
+    start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+    end_date = datetime.now().strftime('%Y-%m-%d')
+
+    try:
+        response = ce_client.get_cost_and_usage(
+            TimePeriod={
+                'Start': start_date,
+                'End': end_date
+            },
+            Granularity='DAILY',
+            Metrics=['BlendedCost']
+        )
+
+    except Exception as e:
+        print("INVALID CREDENTIALS!!!\nPlease check your credentials")
+        return False
+    
+    return True
+
+def cost_alarm(recip_email,cost_alrm):
+    if cost_alrm == 'ready':
+        money = input("Enter the daily budget limit for sending an email notification( in $ ): ")  
+        command = ["python", "child_script.py", money]
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    else:
+        print("Please run Email Bill command before cost alarm and setup email notification!!!")
+
 
 def login(access_key,secret_access,startdate,enddate):
     session = boto3.Session(
@@ -14,9 +56,6 @@ def login(access_key,secret_access,startdate,enddate):
     aws_secret_access_key=secret_access,
     region_name=region
 )
-
-    # Now use 'session' to interact with AWS services
-    s3 = session.client('s3')
 
     ce = session.client('ce')
     response_ce = ce.get_cost_and_usage(TimePeriod={'Start':startdate,
@@ -39,11 +78,16 @@ def login(access_key,secret_access,startdate,enddate):
     exi = input("...")
     
 def create_user():
+    print("Creating user...")
     username = input("Enter access key: ")
     password = input("Enter secret access key: ")
-    config_data['user']['username'] = username
-    config_data['user']['password'] = password
-    save_config(config_data)
+    if userlogver(username, password) == False:
+        create_user()
+    else:
+        config_data['user']['username'] = username
+        config_data['user']['password'] = password
+        config_data['user']['cost_alarm'] = 'null'
+        save_config(config_data)
 
 def ses_send(recip_email, username, password):
     with open('cost_data.txt', 'r') as file:
@@ -101,17 +145,11 @@ def get_date():
             # Get user input
             date_str = input(f"Enter a date for (yyyy-mm-dd): ")
 
-            date_obj = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
 
             return date_str
         except ValueError:
             print("Invalid date format. Please enter the date in yyyy-mm-dd format.")
-
-username = "null"
-userlogin = 0
-exit_commands = {'exit','quit','q','e'}
-commands = "1.Login\n2.Monitor Cost\n3.Email Bill\n4.Logout"
-config_file_path = 'config.json'
 
 def load_config():
     with open(config_file_path, 'r') as config_file:
@@ -137,6 +175,7 @@ while True:
     first_run()
     username = user_data.get('username')
     password = user_data.get('password')
+    cost_alrm = user_data.get('cost_alarm')
     print("\nUsername = ",username)
     if username == "null":
         print("No User Login\n")
@@ -153,22 +192,23 @@ while True:
     if user_input.lower() == '1':
         user_login()
         if username == "null":
+            first_run()
             create_user()
         print("\nLogin successful")
-        time.sleep(1)
+        exi = input("...")
         
             
         
     elif user_input.lower() == '2':
         first_run()
         print("Cost Monitoring...\nPlease enter the dates to analyze the cost")
-        date2 = (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
+        date2 = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
         date1 = get_date()
 
         if username != "null":
             login(username, password,date1,date2)
 
-    elif user_input.lower() == '4':
+    elif user_input.lower() == '5':
         log_out()
 
     elif user_input.lower() == '3':
@@ -177,12 +217,22 @@ while True:
         if recip_email == "null":
             print("Before using the email, please verify that the email has been configured on aws")
             recip_email = input("Enter your email address:")
+        try:
+            ses_send(recip_email,username,password)
+        except Exception as e:
+            print("Email ID error")
+            time.sleep(3)
+        else:
             config_data['user']['email'] = recip_email
+            config_data['user']['cost_alarm'] = 'ready'
             save_config(config_data)
-
-        ses_send(recip_email,username,password)
         time.sleep(1)
 
+    if user_input.lower() == '4':
+        recip_email = user_data.get('email')
+        first_run()
+        cost_alarm(recip_email,cost_alrm)
+        time.sleep(2)
 
     print(f"You entered: {user_input}")
 
